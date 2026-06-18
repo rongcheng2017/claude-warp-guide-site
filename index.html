@@ -1,0 +1,1027 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>用 WARP 落地解决 Claude app 的 Cloudflare 验证闪跳</title>
+  <meta name="description" content="Claude 桌面 app 在「正在进行安全验证」与「Couldn&#39;t connect to Claude」之间反复横跳,根因通常是机房 IP 信誉差,过不了 Cloudflare 的 JS challenge。在代理链路末端串一层 Cloudflare WARP 把出口 IP 洗成 WARP IP 可以解决 app 闪跳；如果 Claude Code 仍报 403 Request not allowed,还要检查 " />
+  <style>
+    :root {
+      --bg: #f7f9f7;
+      --paper: #ffffff;
+      --ink: #17221d;
+      --muted: #5f6a64;
+      --soft: #eef3ef;
+      --line: #d8e2db;
+      --accent: #14766a;
+      --accent-strong: #0d5f55;
+      --accent-warm: #b85f26;
+      --warn: #b33a33;
+      --bug: #8b3e75;
+      --code-bg: #111a18;
+      --code-line: #2b3a36;
+      --code-text: #e8f1ec;
+      --shadow: 0 18px 50px rgba(16, 34, 27, 0.08);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    a {
+      color: var(--accent-strong);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.18em;
+    }
+
+    .site-header {
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(130deg, rgba(20, 118, 106, 0.13), rgba(184, 95, 38, 0.11) 58%, rgba(255, 255, 255, 0.82)),
+        var(--paper);
+    }
+
+    .header-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 46px 24px 34px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent-strong);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 860px;
+      margin: 18px 0 0;
+      color: #33423b;
+      font-size: 18px;
+      line-height: 1.65;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid rgba(20, 118, 106, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.76);
+      color: #2d4940;
+      font-weight: 650;
+    }
+
+    .page-shell {
+      display: grid;
+      grid-template-columns: minmax(190px, 250px) minmax(0, 880px);
+      gap: 42px;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 16px 0 16px 16px;
+      border-left: 3px solid var(--line);
+    }
+
+    .toc strong {
+      display: block;
+      margin-bottom: 10px;
+      color: #24332d;
+      font-size: 14px;
+    }
+
+    .toc a {
+      display: block;
+      margin: 7px 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      color: var(--accent-strong);
+    }
+
+    .toc .toc-l3 {
+      padding-left: 14px;
+      font-size: 13px;
+    }
+
+    article {
+      min-width: 0;
+      padding-bottom: 20px;
+    }
+
+    article h1 {
+      display: none;
+    }
+
+    article h2,
+    article h3,
+    article h4 {
+      position: relative;
+      letter-spacing: 0;
+      scroll-margin-top: 24px;
+    }
+
+    article h2 {
+      margin: 44px 0 14px;
+      padding-top: 6px;
+      font-size: 28px;
+      line-height: 1.28;
+    }
+
+    article h3 {
+      margin: 32px 0 12px;
+      font-size: 22px;
+      line-height: 1.32;
+    }
+
+    article h4 {
+      margin: 24px 0 10px;
+      font-size: 18px;
+    }
+
+    .heading-anchor {
+      margin-left: 8px;
+      color: #90a19a;
+      font-size: 0.72em;
+      text-decoration: none;
+      opacity: 0;
+    }
+
+    h2:hover .heading-anchor,
+    h3:hover .heading-anchor,
+    h4:hover .heading-anchor {
+      opacity: 1;
+    }
+
+    article p,
+    article li {
+      color: #25312c;
+    }
+
+    article p {
+      margin: 13px 0;
+    }
+
+    article ul,
+    article ol {
+      padding-left: 1.35rem;
+      margin: 14px 0;
+    }
+
+    article li + li {
+      margin-top: 6px;
+    }
+
+    strong {
+      color: #111c17;
+      font-weight: 750;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--line);
+      margin: 34px 0;
+    }
+
+    code {
+      border: 1px solid rgba(20, 118, 106, 0.18);
+      border-radius: 6px;
+      background: #edf5f1;
+      color: #0f5f55;
+      padding: 0.08em 0.34em;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+      overflow-wrap: anywhere;
+    }
+
+    .code-block {
+      margin: 18px 0;
+      overflow: hidden;
+      border: 1px solid var(--code-line);
+      border-radius: 8px;
+      background: var(--code-bg);
+      box-shadow: var(--shadow);
+    }
+
+    .code-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 10px 8px 14px;
+      border-bottom: 1px solid var(--code-line);
+      color: #a9bbb4;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .copy-code {
+      min-width: 58px;
+      border: 1px solid rgba(232, 241, 236, 0.22);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #e8f1ec;
+      cursor: pointer;
+      font: inherit;
+      padding: 4px 8px;
+    }
+
+    .copy-code:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    pre {
+      margin: 0;
+      overflow-x: auto;
+      padding: 16px;
+      color: var(--code-text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    pre code {
+      display: block;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      white-space: pre;
+      overflow-wrap: normal;
+    }
+
+    blockquote,
+    .callout {
+      margin: 18px 0;
+      border-left: 4px solid var(--accent);
+      background: #ffffff;
+      box-shadow: 0 10px 30px rgba(16, 34, 27, 0.06);
+    }
+
+    blockquote {
+      padding: 12px 16px;
+      color: #33423b;
+    }
+
+    .callout {
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .callout-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(20, 118, 106, 0.1);
+      color: #16352f;
+      font-weight: 760;
+    }
+
+    .callout-title span {
+      display: inline-grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(20, 118, 106, 0.12);
+      color: var(--accent-strong);
+      font-size: 13px;
+      flex: 0 0 auto;
+    }
+
+    .callout-body {
+      padding: 12px 16px 14px;
+    }
+
+    .callout-body > :first-child {
+      margin-top: 0;
+    }
+
+    .callout-body > :last-child {
+      margin-bottom: 0;
+    }
+
+    .callout-warning {
+      border-left-color: var(--accent-warm);
+    }
+
+    .callout-warning .callout-title span {
+      background: rgba(184, 95, 38, 0.14);
+      color: #91501e;
+    }
+
+    .callout-important,
+    .callout-bug {
+      border-left-color: var(--warn);
+    }
+
+    .callout-important .callout-title span,
+    .callout-bug .callout-title span {
+      background: rgba(179, 58, 51, 0.12);
+      color: var(--warn);
+    }
+
+    .callout-tip {
+      border-left-color: #30805c;
+    }
+
+    .table-wrap {
+      width: 100%;
+      margin: 18px 0;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--soft);
+      color: #26352f;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .site-footer {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 24px 44px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 880px) {
+      .header-inner {
+        padding: 34px 18px 28px;
+      }
+
+      .subtitle {
+        font-size: 16px;
+      }
+
+      .page-shell {
+        display: block;
+        padding: 22px 18px 54px;
+      }
+
+      .toc {
+        position: static;
+        max-height: none;
+        margin-bottom: 22px;
+        padding: 12px 0 12px 14px;
+      }
+
+      .toc a {
+        display: inline-block;
+        margin: 4px 12px 4px 0;
+      }
+
+      .toc .toc-l3 {
+        padding-left: 0;
+      }
+
+      article h2 {
+        font-size: 24px;
+      }
+
+      article h3 {
+        font-size: 20px;
+      }
+
+      pre {
+        font-size: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <p class="eyebrow">Claude app / Claude Code 代理排障手册</p>
+      <h1>用 WARP 落地解决 Claude app 的 Cloudflare 验证闪跳</h1>
+      <p class="subtitle">Claude 桌面 app 在「正在进行安全验证」与「Couldn't connect to Claude」之间反复横跳,根因通常是机房 IP 信誉差,过不了 Cloudflare 的 JS challenge。在代理链路末端串一层 Cloudflare WARP 把出口 IP 洗成 WARP IP 可以解决 app 闪跳；如果 Claude Code 仍报 403 Request not allowed,还要检查 </p>
+      <div class="meta-row">
+        <span class="pill">更新：2026-06-18</span>
+        <span class="pill">代理</span>
+        <span class="pill">cloudflare</span>
+        <span class="pill">warp</span>
+        <span class="pill">claude</span>
+        <span class="pill">claude-code</span>
+        <span class="pill">mihomo</span>
+      </div>
+    </div>
+  </header>
+  <main class="page-shell">
+    <nav class="toc" aria-label="目录">
+      <strong>目录</strong>
+      <a class="toc-l2" href="#适用环境">适用环境</a>
+      <a class="toc-l2" href="#故障判断:怎么确认是这个问题">故障判断:怎么确认是这个问题</a>
+      <a class="toc-l3" href="#如果是-claude-code-报-403">如果是 Claude Code 报 403</a>
+      <a class="toc-l2" href="#原理:链式代理-warp-落地">原理:链式代理 + WARP 落地</a>
+      <a class="toc-l2" href="#完整执行步骤">完整执行步骤</a>
+      <a class="toc-l3" href="#1-安装-wgcf-并生成-warp-配置匿名免费">1. 安装 wgcf 并生成 WARP 配置(匿名,免费)</a>
+      <a class="toc-l3" href="#2-临时验证注入运行时配置-热重载">2. 临时验证(注入运行时配置 + 热重载)</a>
+      <a class="toc-l3" href="#3-持久化关键防订阅更新-关代理覆盖">3. 持久化(关键,防订阅更新 / 关代理覆盖)</a>
+      <a class="toc-l3" href="#35-修复-verge-merge-脚本防-warp-claude-丢失">3.5. 修复 Verge Merge 脚本,防 WARP-CLAUDE 丢失</a>
+      <a class="toc-l3" href="#4-闭环验证">4. 闭环验证</a>
+      <a class="toc-l2" href="#故障恢复-排查速查">故障恢复 / 排查速查</a>
+      <a class="toc-l2" href="#无效-别浪费时间的方向">无效 / 别浪费时间的方向</a>
+      <a class="toc-l2" href="#关键认知沉淀">关键认知沉淀</a>
+    </nav>
+    <article>
+      <h1 id="用-warp-落地解决-claude-app-的-cloudflare-验证闪跳">用 WARP 落地解决 Claude app 的 Cloudflare 验证闪跳<a class="heading-anchor" aria-label="复制本节链接" href="#用-warp-落地解决-claude-app-的-cloudflare-验证闪跳">#</a></h1>
+<aside class="callout callout-note">
+<div class="callout-title"><span>i</span>一句话</div>
+<div class="callout-body"><p>Claude 桌面 app 在「正在进行安全验证」与「Couldn't connect to Claude」之间反复横跳,根因通常是<strong>机房 IP 信誉差,过不了 Cloudflare 的 JS challenge</strong>。在代理链路末端串一层 <strong>Cloudflare WARP</strong> 把出口 IP 洗成 WARP IP 可以解决 app 闪跳；如果 Claude Code 仍报 <code>403 Request not allowed</code>,还要检查 Verge merge 脚本是否真的把 <code>WARP</code> / <code>WARP-CLAUDE</code> 合进 mihomo 运行配置。</p></div>
+</aside>
+<h2 id="适用环境">适用环境<a class="heading-anchor" aria-label="复制本节链接" href="#适用环境">#</a></h2>
+<p>本次实操环境,换环境时按此对照:</p>
+<ul>
+<li>macOS(Apple Silicon)</li>
+<li>代理客户端:<strong>Clash Verge Rev 2.5.1</strong>,内核 <strong>Mihomo (verge-mihomo) v1.19.25</strong></li>
+<li>混合端口:<code>127.0.0.1:7897</code></li>
+<li>内核控制器:unix socket <code>/tmp/verge/verge-mihomo.sock</code></li>
+<li>当前订阅:<code>US-西海岸</code>,落地节点 <code>美国🇺🇸-西海岸-01</code>(VLESS+Reality),选节点组名 <code>PROXY</code></li>
+</ul>
+<aside class="callout callout-important">
+<div class="callout-title"><span>!</span>前置条件</div>
+<div class="callout-body"><p>内核<strong>必须是 Mihomo / Clash.Meta</strong>——只有它支持 <code>wireguard</code> 出站 + <code>dialer-proxy</code> 链式代理。老版 Clash(Premium/原版)不行。</p></div>
+</aside>
+<h2 id="故障判断:怎么确认是这个问题">故障判断:怎么确认是这个问题<a class="heading-anchor" aria-label="复制本节链接" href="#故障判断:怎么确认是这个问题">#</a></h2>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code># 1. 看当前出口 IP 与 Cloudflare 对它的处置
+curl -s -x http://127.0.0.1:7897 --max-time 15 \
+  https://claude.ai/cdn-cgi/trace | grep -iE &quot;^(ip|warp)=&quot;
+
+# 2. 看 claude.ai 是否被 challenge
+curl -s -I -x http://127.0.0.1:7897 --max-time 20 \
+  https://claude.ai/ | grep -iE &quot;^(HTTP|cf-mitigated|server)&quot;</code></pre>
+</div>
+<p>判据:</p>
+<ul>
+<li>出口是<strong>机房 IP</strong>(如 ColoCrossing 的 <code>107.174.x.x</code>),<code>warp=off</code></li>
+<li>响应头出现 <code>cf-mitigated: challenge</code> + <code>HTTP 403</code></li>
+</ul>
+<aside class="callout callout-warning">
+<div class="callout-title"><span>!</span>curl 的 403 不代表 app 也进不去</div>
+<div class="callout-body"><p><code>cf-mitigated: **challenge**</code>(区别于 <code>block</code>)是<strong>需要浏览器跑 JS</strong> 才能放行的挑战。curl 不执行 JS,所以<strong>永远</strong>停在 403——哪怕用最干净的住宅 IP 也是 403。 所以 <strong>curl 只能用来看出口 IP 和是否触发 challenge,不能用来判定 app 最终能否进</strong>。最终结论只能靠真实 app/浏览器实测。 机房 IP 闪跳的真正原因:IP 信誉太差,JS 跑完也不放行;或 IP 不稳定导致放行 cookie 频繁失效 → 反复横跳。</p></div>
+</aside>
+<h3 id="如果是-claude-code-报-403">如果是 Claude Code 报 403<a class="heading-anchor" aria-label="复制本节链接" href="#如果是-claude-code-报-403">#</a></h3>
+<p>如果症状是 Claude Code 里出现:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>Please run /login · API Error: 403 Request not allowed</code></pre>
+</div>
+<p>先不要急着重登账号。先确认 Clash Verge 是否回退到了默认最小配置:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>BASE=&quot;$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev&quot;
+
+&quot;/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo&quot; \
+  -t \
+  -d &quot;$BASE&quot; \
+  -f &quot;$BASE/clash-verge-check.yaml&quot;
+
+rg -n 'WARP-CLAUDE|name: WARP|DOMAIN-SUFFIX,claude.ai|append-proxies|append-proxy-groups|proxy-groups:|proxies:' \
+  &quot;$BASE/clash-verge.yaml&quot; | sed -n '1,100p'
+
+tail -n 200 &quot;$BASE/logs/latest.log&quot; | rg -i 'WARP-CLAUDE|test failed|最小配置|proxy .*not found|配置验证'</code></pre>
+</div>
+<p>命中下面这类日志,就是 Merge / Script 持久化没闭环:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>rules[0] [DOMAIN-SUFFIX,claude.ai,WARP-CLAUDE] error: proxy [WARP-CLAUDE] not found
+配置验证未通过,使用默认最小配置启动</code></pre>
+</div>
+<p>这种场景直接跳到 <a href="#35-修复-verge-merge-脚本防-warp-claude-丢失">3.5</a>,不要继续反复 <code>/login</code>。</p>
+<h2 id="原理:链式代理-warp-落地">原理:链式代理 + WARP 落地<a class="heading-anchor" aria-label="复制本节链接" href="#原理:链式代理-warp-落地">#</a></h2>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>本地 Claude app → Clash(7897) → 你的VPS机房节点(PROXY) → WARP → claude.ai
+                                                          ↑ 出口IP在这里被洗成 Cloudflare WARP IP</code></pre>
+</div>
+<p>WARP 出口是 Cloudflare 自家 IP(如 <code>104.28.x.x</code>),Cloudflare 对它信任度高,JS challenge 能稳定通过。</p>
+<aside class="callout callout-tip">
+<div class="callout-title"><span>?</span>为什么 API 通道(Claude Code 终端版)不受影响</div>
+<div class="callout-body"><p><code>api.anthropic.com</code> 不走 claude.ai 那套浏览器人机验证。同一个被 challenge 的机房 IP 下,<code>claude.ai</code> 返回 403,而 <code>api.anthropic.com</code> 返回 401(已到后端,只是没带 key)。 <strong>所以这道题如果只是想用 Claude 干活,Claude Code 终端版通常能绕开 challenge。</strong> 但如果 Claude Code 自己也报 <code>API Error: 403 Request not allowed</code>,先不要判断账号坏了,要按 <a href="#35-修复-verge-merge-脚本防-warp-claude-丢失">3.5</a> 检查 Clash Verge 是否回退成最小配置。</p></div>
+</aside>
+<hr />
+<h2 id="完整执行步骤">完整执行步骤<a class="heading-anchor" aria-label="复制本节链接" href="#完整执行步骤">#</a></h2>
+<h3 id="1-安装-wgcf-并生成-warp-配置匿名免费">1. 安装 wgcf 并生成 WARP 配置(匿名,免费)<a class="heading-anchor" aria-label="复制本节链接" href="#1-安装-wgcf-并生成-warp-配置匿名免费">#</a></h3>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>brew install wgcf
+
+mkdir -p ~/.config/warp &amp;&amp; cd ~/.config/warp
+# 注册走现有代理出去
+export HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 ALL_PROXY=http://127.0.0.1:7897
+wgcf register --accept-tos      # 生成 wgcf-account.toml
+wgcf generate                   # 生成 wgcf-profile.conf</code></pre>
+</div>
+<p>产物 <code>~/.config/warp/wgcf-profile.conf</code> 含字段:<code>PrivateKey</code>、<code>Address</code>、<code>PublicKey</code>(Cloudflare 固定 <code>bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=</code>)、<code>Endpoint</code>。</p>
+<aside class="callout callout-warning">
+<div class="callout-title"><span>!</span>提取私钥不要用 <code>sed 's/.*= *//'</code></div>
+<div class="callout-body"><p>base64 私钥末尾的 <code>=</code> 会被贪婪匹配吃掉。用 awk 按分隔符切:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>PK=$(awk -F' = ' '/^PrivateKey/{print $2}' ~/.config/warp/wgcf-profile.conf)
+# 正常长度 44</code></pre>
+</div></div>
+</aside>
+<h3 id="2-临时验证注入运行时配置-热重载">2. 临时验证(注入运行时配置 + 热重载)<a class="heading-anchor" aria-label="复制本节链接" href="#2-临时验证注入运行时配置-热重载">#</a></h3>
+<aside class="callout callout-note">
+<div class="callout-title"><span>i</span>临时注入会被覆盖</div>
+<div class="callout-body"><p>直接改运行时 <code>clash-verge.yaml</code> 只为快速验证。<strong>一旦关代理 / 更新订阅 / 重启 Verge,内核会从订阅重新生成配置,WARP 块就被冲掉</strong>(实操中踩过这个坑:关代理重开后 app 又开始闪)。验证通过后必须做第 3 步持久化。</p></div>
+</aside>
+<p>运行时配置路径:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml</code></pre>
+</div>
+<p>往 <code>proxies:</code> / <code>proxy-groups:</code> / <code>rules:</code> 三段顶部分别注入 WARP 出站、WARP-CLAUDE 组、claude 分流规则后,热重载:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>CFG=&quot;$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml&quot;
+curl -s --unix-socket /tmp/verge/verge-mihomo.sock \
+  -X PUT &quot;http://localhost/configs?force=true&quot; \
+  -H &quot;Content-Type: application/json&quot; --data &quot;{\&quot;path\&quot;:\&quot;$CFG\&quot;}&quot; \
+  -w &quot;HTTP:%{http_code}\n&quot;          # 204 = 重载成功</code></pre>
+</div>
+<p>验证(WARP 是 lazy 握手,首次连接才建隧道,多试两次):</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>curl -s -x http://127.0.0.1:7897 --max-time 30 \
+  https://claude.ai/cdn-cgi/trace | grep -iE &quot;^(ip|warp)=&quot;
+# 期望:ip=104.28.x.x   warp=on</code></pre>
+</div>
+<p>然后<strong>到 Claude app 点 Refresh / 重开</strong>——能进且不闪,即验证通过。</p>
+<h3 id="3-持久化关键防订阅更新-关代理覆盖">3. 持久化(关键,防订阅更新 / 关代理覆盖)<a class="heading-anchor" aria-label="复制本节链接" href="#3-持久化关键防订阅更新-关代理覆盖">#</a></h3>
+<p>把 WARP 写进<strong>当前订阅绑定的 Merge 扩展配置文件</strong>。Verge 每次生成配置都会自动合入,不再丢。</p>
+<p>定位 Merge 文件:看 <code>profiles.yaml</code> 中 <code>current:</code> 指向的订阅,其 <code>option.merge</code> 字段的 uid 即对应 <code>profiles/&lt;uid&gt;.yaml</code>。</p>
+<ul>
+<li>本例:订阅 <code>US-西海岸</code> → merge uid <code>mRW52hstmzq9</code> → 文件 <code>profiles/mRW52hstmzq9.yaml</code></li>
+</ul>
+<p>在该 Merge 文件中追加(Verge 合并语法):</p>
+<div class="code-block" data-language="yaml">
+<div class="code-toolbar">
+<span>yaml</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code># prepend-rules 顶部加分流(若已有 prepend-rules 段就并进去)
+prepend-rules:
+  - DOMAIN-SUFFIX,claude.ai,WARP-CLAUDE
+  - DOMAIN-SUFFIX,anthropic.com,WARP-CLAUDE
+  - DOMAIN-SUFFIX,claudeusercontent.com,WARP-CLAUDE
+
+append-proxies:
+  - name: WARP
+    type: wireguard
+    server: 162.159.192.1
+    port: 2408
+    ip: 172.16.0.2
+    ipv6: 2606:4700:110:8560:f32c:59c1:df01:6587   # 用 wgcf-profile.conf 里的 Address
+    private-key: &lt;从 ~/.config/warp/wgcf-profile.conf 的 PrivateKey 填入&gt;
+    public-key: bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+    udp: true
+    mtu: 1280
+    dialer-proxy: PROXY        # 指向选节点组名,不写死节点名
+
+append-proxy-groups:
+  - name: WARP-CLAUDE
+    type: select
+    proxies:
+      - WARP
+      - PROXY                  # 可随时切回直连主节点对比</code></pre>
+</div>
+<aside class="callout callout-important">
+<div class="callout-title"><span>!</span><code>dialer-proxy</code> 指向组名而非节点名</div>
+<div class="callout-body"><p>写 <code>dialer-proxy: PROXY</code>(选节点组),不要写死 <code>美国🇺🇸-西海岸-01</code>。订阅更新后节点名可能变(<code>-01</code>→<code>-02</code>),组名 <code>PROXY</code> 稳定,更抗订阅变动。</p></div>
+</aside>
+<h3 id="35-修复-verge-merge-脚本防-warp-claude-丢失">3.5. 修复 Verge Merge 脚本,防 WARP-CLAUDE 丢失<a class="heading-anchor" aria-label="复制本节链接" href="#35-修复-verge-merge-脚本防-warp-claude-丢失">#</a></h3>
+<aside class="callout callout-bug">
+<div class="callout-title"><span>!</span>另一个坑:Merge 写了,但 mihomo 还是没收到</div>
+<div class="callout-body"><p>Clash Verge 的 Merge 扩展可以写 <code>prepend-rules</code>、<code>append-proxies</code>、<code>append-proxy-groups</code>。但这些字段不是 mihomo 原生字段。如果当前 profile 绑定的 Script 只把 <code>prepend-rules</code> 合进 <code>rules</code>,就会出现<strong>规则已经引用 <code>WARP-CLAUDE</code>,代理组却没合进去</strong>的半残配置。</p></div>
+</aside>
+<p>典型报错:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>rules[0] [DOMAIN-SUFFIX,claude.ai,WARP-CLAUDE] error: proxy [WARP-CLAUDE] not found
+configuration file .../clash-verge-check.yaml test failed</code></pre>
+</div>
+<p>然后 Verge 会回退成默认最小配置。此时 <code>127.0.0.1:7897</code> 端口可能还通,但运行内核只有 <code>DIRECT</code> / <code>REJECT</code> / <code>GLOBAL</code>,没有订阅节点、没有 WARP、没有 Claude 规则。Claude Code 里看到的 <code>API Error: 403 Request not allowed</code> 可能就是这个下游症状。</p>
+<p>先从 <code>profiles.yaml</code> 找当前订阅绑定的 script:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>BASE=&quot;$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev&quot;
+sed -n '1,260p' &quot;$BASE/profiles.yaml&quot;</code></pre>
+</div>
+<p>本例当前订阅结构:</p>
+<div class="code-block" data-language="yaml">
+<div class="code-toolbar">
+<span>yaml</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>current: RSyoMJtbwJej
+items:
+  - uid: RSyoMJtbwJej
+    type: remote
+    option:
+      merge: mRW52hstmzq9
+      script: sy6r7S83pXpe</code></pre>
+</div>
+<p>备份脚本:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>SCRIPT=&quot;$BASE/profiles/sy6r7S83pXpe.js&quot;
+cp &quot;$SCRIPT&quot; &quot;$SCRIPT.bak-$(date +%Y%m%d-%H%M%S)&quot;</code></pre>
+</div>
+<p>把脚本补成同时处理 <code>rules</code>、<code>proxies</code>、<code>proxy-groups</code>:</p>
+<div class="code-block" data-language="javascript">
+<div class="code-toolbar">
+<span>javascript</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>function main(config, profileName) {
+  if (!config || typeof config !== &quot;object&quot;) return config;
+
+  mergeNamedList(config, &quot;proxies&quot;, &quot;prepend-proxies&quot;, &quot;append-proxies&quot;);
+  mergeNamedList(config, &quot;proxy-groups&quot;, &quot;prepend-proxy-groups&quot;, &quot;append-proxy-groups&quot;);
+  mergeValueList(config, &quot;rules&quot;, &quot;prepend-rules&quot;, &quot;append-rules&quot;);
+
+  return config;
+}
+
+function mergeNamedList(config, targetKey, prependKey, appendKey) {
+  mergeList(config, targetKey, prependKey, appendKey, function(item) {
+    if (item &amp;&amp; typeof item === &quot;object&quot; &amp;&amp; item.name) return item.name;
+    return stringifyKey(item);
+  });
+}
+
+function mergeValueList(config, targetKey, prependKey, appendKey) {
+  mergeList(config, targetKey, prependKey, appendKey, stringifyKey);
+}
+
+function mergeList(config, targetKey, prependKey, appendKey, keyForItem) {
+  var prepend = Array.isArray(config[prependKey]) ? config[prependKey] : [];
+  var existing = Array.isArray(config[targetKey]) ? config[targetKey] : [];
+  var append = Array.isArray(config[appendKey]) ? config[appendKey] : [];
+
+  delete config[prependKey];
+  delete config[appendKey];
+
+  if (prepend.length === 0 &amp;&amp; append.length === 0) return;
+
+  var seen = {};
+  var merged = [];
+
+  function pushItem(item) {
+    if (item == null) return;
+    var key = keyForItem(item);
+    if (seen[key]) return;
+    seen[key] = true;
+    merged.push(item);
+  }
+
+  for (var i = 0; i &lt; prepend.length; i++) pushItem(prepend[i]);
+  for (var j = 0; j &lt; existing.length; j++) pushItem(existing[j]);
+  for (var k = 0; k &lt; append.length; k++) pushItem(append[k]);
+
+  config[targetKey] = merged;
+}
+
+function stringifyKey(item) {
+  return typeof item === &quot;string&quot; ? item : JSON.stringify(item);
+}</code></pre>
+</div>
+<p>检查脚本语法:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>node --check &quot;$SCRIPT&quot;</code></pre>
+</div>
+<p>离线验证脚本能否把 <code>append-*</code> 真正合进去:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>python3 - &lt;&lt;'PY'
+import json, os, yaml
+base = os.path.expanduser('~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev')
+with open(os.path.join(base, 'clash-verge-check.yaml'), encoding='utf-8') as f:
+    data = yaml.safe_load(f)
+with open('/tmp/clash-verge-check.json', 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False)
+PY
+
+SCRIPT=&quot;$BASE/profiles/sy6r7S83pXpe.js&quot; node - &lt;&lt;'NODE'
+const fs = require('fs');
+const vm = require('vm');
+const scriptPath = process.env.SCRIPT;
+const code = fs.readFileSync(scriptPath, 'utf8');
+const config = JSON.parse(fs.readFileSync('/tmp/clash-verge-check.json', 'utf8'));
+const context = {};
+vm.createContext(context);
+vm.runInContext(code, context, { filename: scriptPath });
+const result = context.main(config, 'current-profile');
+fs.writeFileSync('/tmp/clash-verge-fixed.json', JSON.stringify(result, null, 2));
+NODE
+
+python3 - &lt;&lt;'PY'
+import json, yaml
+with open('/tmp/clash-verge-fixed.json', encoding='utf-8') as f:
+    data = json.load(f)
+with open('/tmp/clash-verge-fixed.yaml', 'w', encoding='utf-8') as f:
+    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+print('has WARP:', any(p.get('name') == 'WARP' for p in data.get('proxies', [])))
+print('has WARP-CLAUDE:', any(g.get('name') == 'WARP-CLAUDE' for g in data.get('proxy-groups', [])))
+print('leftover append-proxies:', 'append-proxies' in data)
+print('leftover append-proxy-groups:', 'append-proxy-groups' in data)
+print('first rule:', data.get('rules', [None])[0])
+PY</code></pre>
+</div>
+<p>预期输出:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>has WARP: True
+has WARP-CLAUDE: True
+leftover append-proxies: False
+leftover append-proxy-groups: False
+first rule: DOMAIN-SUFFIX,claude.ai,WARP-CLAUDE</code></pre>
+</div>
+<p>再校验临时配置:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>&quot;/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo&quot; \
+  -t \
+  -d &quot;$BASE&quot; \
+  -f /tmp/clash-verge-fixed.yaml</code></pre>
+</div>
+<p>预期:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>configuration file /tmp/clash-verge-fixed.yaml test is successful</code></pre>
+</div>
+<p>完成 Merge 和 Script 两处持久化后,<strong>完全退出 Clash Verge 再重开</strong>(⌘Q → 重新打开,TUN 模式可能要输一次密码)。重开后内核会用新 Merge + Script 重新生成配置并自动带上 WARP。</p>
+<h3 id="4-闭环验证">4. 闭环验证<a class="heading-anchor" aria-label="复制本节链接" href="#4-闭环验证">#</a></h3>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>CFG=&quot;$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/clash-verge.yaml&quot;
+grep -q &quot;name: WARP$&quot; &quot;$CFG&quot; &amp;&amp; echo &quot;重生成的运行时配置已自动合入 WARP&quot;
+curl -s -x http://127.0.0.1:7897 --max-time 30 \
+  https://claude.ai/cdn-cgi/trace | grep -iE &quot;^(ip|warp)=&quot;   # warp=on 即成</code></pre>
+</div>
+<p>配置层验证:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>&quot;/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo&quot; \
+  -t \
+  -d &quot;$HOME/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev&quot; \
+  -f &quot;$CFG&quot;
+
+rg -n 'WARP-CLAUDE|name: WARP|DOMAIN-SUFFIX,claude.ai|append-proxies|append-proxy-groups|proxy-groups:|proxies:' \
+  &quot;$CFG&quot; | sed -n '1,100p'</code></pre>
+</div>
+<p>运行内核验证(HTTP 控制端口关了也可以走 Unix socket):</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>SOCK=/tmp/verge/verge-mihomo.sock
+
+curl -sS --unix-socket &quot;$SOCK&quot; \
+  -H 'Authorization: Bearer set-your-secret' \
+  'http://127.0.0.1/proxies' \
+  | jq '.proxies | with_entries(select(.key == &quot;WARP&quot; or .key == &quot;WARP-CLAUDE&quot; or .key == &quot;PROXY&quot;))'
+
+curl -sS --unix-socket &quot;$SOCK&quot; \
+  -H 'Authorization: Bearer set-your-secret' \
+  'http://127.0.0.1/rules' \
+  | jq '{total: (.rules|length), first: .rules[0:10]}'</code></pre>
+</div>
+<p>Claude Code API 域验证:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>curl -sS -i --max-time 20 --proxy http://127.0.0.1:7897 \
+  https://api.anthropic.com/v1/messages \
+  | sed -n '1,40p'</code></pre>
+</div>
+<p>无认证 GET 请求的正常可达表现是:</p>
+<div class="code-block" data-language="text">
+<div class="code-toolbar">
+<span>text</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>HTTP/2 405
+content-type: application/json
+
+{
+  &quot;type&quot;: &quot;error&quot;,
+  &quot;error&quot;: {
+    &quot;type&quot;: &quot;invalid_request_error&quot;,
+    &quot;message&quot;: &quot;Method Not Allowed&quot;
+  }
+}</code></pre>
+</div>
+<aside class="callout callout-tip">
+<div class="callout-title"><span>?</span>405 是好信号</div>
+<div class="callout-body"><p><code>api.anthropic.com/v1/messages</code> 的 <code>405 Method Not Allowed</code> 说明已经到 Anthropic API 后端了,只是这个测试请求方法不对。不要把它当失败。</p></div>
+</aside>
+<p>Claude Code 进程侧验证:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>env \
+  HTTP_PROXY=http://127.0.0.1:7897 \
+  HTTPS_PROXY=http://127.0.0.1:7897 \
+  ALL_PROXY=socks5h://127.0.0.1:7898 \
+  claude --version</code></pre>
+</div>
+<p>预期快速返回版本号。如果 <code>claude -p</code> 卡住,看最新 debug 日志,它可能卡在插件缓存、Git clone、manifest 校验等本地初始化问题,不一定是代理:</p>
+<div class="code-block" data-language="bash">
+<div class="code-toolbar">
+<span>bash</span>
+<button class="copy-code" type="button">复制</button>
+</div>
+<pre><code>LATEST=&quot;$(ls -t ~/.claude/debug/*.txt | head -n 1)&quot;
+rg -n -i 'error|403|request not allowed|auth|oauth|api|timeout|network|proxy|cloudflare|challenge|failed' &quot;$LATEST&quot; | sed -n '1,220p'</code></pre>
+</div>
+<p>Claude app 重开能正常进、不闪 → 彻底闭环。以后关代理、更新订阅都无需再手动折腾。</p>
+<hr />
+<h2 id="故障恢复-排查速查">故障恢复 / 排查速查<a class="heading-anchor" aria-label="复制本节链接" href="#故障恢复-排查速查">#</a></h2>
+<div class="table-wrap"><table><thead><tr><th>现象</th><th>原因</th><th>处理</th></tr></thead><tbody><tr><td>重开 Verge 后 app 又闪</td><td>WARP 没进 Merge,只临时注入过</td><td>回第 3 步,写进 Merge 文件</td></tr>
+<tr><td><code>rules[0] ... WARP-CLAUDE ... proxy not found</code></td><td>Script 只合并了 rules,没合并 proxies / proxy-groups</td><td>回第 3.5 步,补 Script 合并逻辑</td></tr>
+<tr><td>7897 端口通,但 <code>rules</code> 总数是 0</td><td>Verge 配置校验失败后回退到默认最小配置</td><td>查 <code>logs/latest.log</code>,修复 <code>clash-verge-check.yaml</code> 的校验错误</td></tr>
+<tr><td><code>warp=off</code> 且出口是机房 IP</td><td>WARP 块被订阅重生成冲掉 / 未生效</td><td>确认 Merge 写入 + 完全重启 Verge</td></tr>
+<tr><td><code>api.anthropic.com/v1/messages</code> 返回 405</td><td>API 域已通,只是测试方法不对</td><td>这是好信号,不要当失败</td></tr>
+<tr><td><code>claude.ai/api/auth/session</code> 仍 403 challenge</td><td>登录页仍被 Cloudflare 挑战</td><td>配置层若已通过,换更干净出口或用浏览器/app 完成挑战</td></tr>
+<tr><td>Claude Code <code>claude -p</code> 卡住</td><td>可能卡在插件缓存 / Git clone / 本地初始化</td><td>查 <code>~/.claude/debug/*.txt</code>,不要直接归因给代理</td></tr>
+<tr><td>热重载 HTTP 非 204</td><td>socket 路径错 / YAML 非法</td><td>校验 YAML;确认 <code>/tmp/verge/verge-mihomo.sock</code> 存在</td></tr>
+<tr><td>私钥长度不是 44</td><td>sed 贪婪匹配吃了 <code>=</code></td><td>改用 <code>awk -F' = '</code> 提取</td></tr>
+<tr><td>所有节点 + WARP 都还 challenge</td><td>Anthropic 对 WARP IP 也持续 challenge</td><td>换<strong>住宅 IP(residential)节点</strong>;过渡期用 Claude Code 终端版</td></tr></tbody></table></div>
+<h2 id="无效-别浪费时间的方向">无效 / 别浪费时间的方向<a class="heading-anchor" aria-label="复制本节链接" href="#无效-别浪费时间的方向">#</a></h2>
+<ul>
+<li>改 UA、改系统时间、清缓存:对<strong>基于 IP 信誉</strong>的 challenge 几乎无效(时间正常时尤其)。</li>
+<li>反复点 Refresh:IP 不变,结果不变。</li>
+<li>浏览器手动过验证再喂 cookie 给 app:app 是独立 Electron webview,cookie 不与系统浏览器共享,不可行。</li>
+</ul>
+<h2 id="关键认知沉淀">关键认知沉淀<a class="heading-anchor" aria-label="复制本节链接" href="#关键认知沉淀">#</a></h2>
+<ol>
+<li><strong><code>cf-mitigated: challenge</code> 要浏览器跑 JS</strong>,curl 永远 403,curl 结论 ≠ app 结论。</li>
+<li><strong>机房 IP 是原罪</strong>,WARP 把出口洗成 Cloudflare 自家 IP 来过 challenge。</li>
+<li><strong>临时注入运行时配置必被订阅重生成覆盖</strong>,持久化要写进 Merge 扩展配置。</li>
+<li><strong>Merge 文件和 Script 文件是一组</strong>:Merge 负责声明 <code>append-*</code>,Script 负责把它们折叠成 mihomo 原生字段。</li>
+<li><strong>API 通道(Claude Code 终端版)通常绕过 claude.ai 登录页 challenge</strong>,但 Claude Code 自己报 403 时,先查运行内核是否回退到了最小配置。</li>
+</ol>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <p>公开分享版。命令中的私钥、secret、真实节点信息请按自己的环境替换，不要直接发布个人凭据。</p>
+  </footer>
+  <script>
+    document.querySelectorAll(".copy-code").forEach(function(button) {
+      button.addEventListener("click", async function() {
+        const code = button.closest(".code-block").querySelector("code").innerText;
+        try {
+          await navigator.clipboard.writeText(code);
+          const oldText = button.textContent;
+          button.textContent = "已复制";
+          setTimeout(function() { button.textContent = oldText; }, 1200);
+        } catch (error) {
+          button.textContent = "复制失败";
+          setTimeout(function() { button.textContent = "复制"; }, 1200);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
